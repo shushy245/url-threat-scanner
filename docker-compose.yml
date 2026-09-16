@@ -1,0 +1,74 @@
+# One command to run the whole system:  docker compose up --build
+#
+# Topology mirrors docs/adr/adr-0001-rabbitmq-transactional-outbox.md:
+#   api    — accepts submissions, writes scan + outbox row in one transaction
+#   relay  — drains the outbox to RabbitMQ (at-least-once)
+#   worker — consumes scan.requested, runs the checks
+services:
+    postgres:
+        image: postgres:16-alpine
+        environment:
+            POSTGRES_USER: scanner
+            POSTGRES_PASSWORD: scanner
+            POSTGRES_DB: scanner
+        ports: ['5432:5432']
+        volumes: ['pgdata:/var/lib/postgresql/data']
+        healthcheck:
+            test: ['CMD-SHELL', 'pg_isready -U scanner -d scanner']
+            interval: 3s
+            timeout: 3s
+            retries: 20
+
+    rabbitmq:
+        image: rabbitmq:3.13-management-alpine
+        environment:
+            RABBITMQ_DEFAULT_USER: scanner
+            RABBITMQ_DEFAULT_PASS: scanner
+        ports: ['5672:5672', '15672:15672']
+        healthcheck:
+            test: ['CMD', 'rabbitmq-diagnostics', '-q', 'check_running']
+            interval: 5s
+            timeout: 5s
+            retries: 20
+
+    # One-shot: applies forward-only migrations, then exits. Everything else waits on it,
+    # so `docker compose up` never races the schema.
+    migrate:
+        build: .
+        command: ['node', 'dist/db/migrate.js']
+        environment:
+            DATABASE_URL: postgres://scanner:scanner@postgres:5432/scanner
+        depends_on:
+            postgres: { condition: service_healthy }
+        restart: 'no'
+
+    api:
+        build: .
+        command: ['node', 'dist/main.api.js']
+        env_file: [.env.docker]
+        ports: ['3000:3000']
+        depends_on:
+            postgres: { condition: service_healthy }
+            rabbitmq: { condition: service_healthy }
+            migrate: { condition: service_completed_successfully }
+
+    relay:
+        build: .
+        command: ['node', 'dist/main.relay.js']
+        env_file: [.env.docker]
+        depends_on:
+            postgres: { condition: service_healthy }
+            rabbitmq: { condition: service_healthy }
+            migrate: { condition: service_completed_successfully }
+
+    worker:
+        build: .
+        command: ['node', 'dist/main.worker.js']
+        env_file: [.env.docker]
+        depends_on:
+            postgres: { condition: service_healthy }
+            rabbitmq: { condition: service_healthy }
+            migrate: { condition: service_completed_successfully }
+
+volumes:
+    pgdata:

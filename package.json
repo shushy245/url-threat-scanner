@@ -1,0 +1,50 @@
+{
+  "name": "url-threat-scanner",
+  "version": "1.0.0",
+  "description": "Above Security — URL threat scanning service",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev:api": "tsx watch src/main.api.ts",
+    "dev:relay": "tsx watch src/main.relay.ts",
+    "dev:worker": "tsx watch src/main.worker.ts",
+    "start:api": "node dist/main.api.js",
+    "start:relay": "node dist/main.relay.js",
+    "start:worker": "node dist/main.worker.js",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:studio": "drizzle-kit studio",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.5",
+    "drizzle-orm": "^0.38.3",
+    "express": "^5.0.1",
+    "pg": "^8.13.1",
+    "pino": "^9.5.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.10.6",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.10",
+    "@types/supertest": "^6.0.2",
+    "drizzle-kit": "^0.30.1",
+    "eslint": "^9.39.5",
+    "eslint-config-shalev": "^2.0.0",
+    "supertest": "^7.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
