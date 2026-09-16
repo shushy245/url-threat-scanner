@@ -8,12 +8,22 @@ import { z } from 'zod';
  * immediately with a message naming the variable, not surface as a confusing connection error on
  * the first request an hour later.
  */
-const configSchema = z.object({
+/**
+ * Split deliberately. A single schema requiring every variable forces every process to satisfy every
+ * other process's needs — the migration job would have to be handed broker credentials it never
+ * uses, which is both a least-privilege violation and a startup failure waiting to happen.
+ *
+ * Each composition root validates exactly what it reads.
+ */
+const baseSchema = z.object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+    DATABASE_URL: z.string().min(1),
+});
+
+const configSchema = baseSchema.extend({
     PORT: z.coerce.number().int().positive().default(3000),
 
-    DATABASE_URL: z.string().min(1),
     RABBITMQ_URL: z.string().min(1),
 
     // Which check implementations the composition root wires in — see ADR-0005.
@@ -54,6 +64,22 @@ const parseApiKeys = (raw: string): ReadonlyMap<string, string> =>
                 return [entry.slice(separatorIndex + 1), entry.slice(0, separatorIndex)] as const;
             }),
     );
+
+export type DatabaseConfig = z.infer<typeof baseSchema>;
+
+const describeIssues = (issues: readonly z.ZodIssue[]): string =>
+    issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ');
+
+/** For the migration job, which needs the database and nothing else. */
+export const loadDatabaseConfig = (env: NodeJS.ProcessEnv = process.env): DatabaseConfig => {
+    const parsed = baseSchema.safeParse(env);
+
+    if (!parsed.success) {
+        throw new Error(`loadDatabaseConfig: invalid environment — ${describeIssues(parsed.error.issues)}`);
+    }
+
+    return parsed.data;
+};
 
 export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
     const parsed = configSchema.safeParse(env);

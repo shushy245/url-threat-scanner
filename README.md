@@ -176,20 +176,28 @@ because a security product must never report "safe" when it means "could not tel
 ## Testing
 
 ```bash
-npm test              # all
-npm run test:unit     # pure logic, fakes for every dependency
-npm run test:integration   # the one place a real Postgres runs
+npm test                   # 83 tests
+npm run test:unit          # 70 — pure logic, fakes for every dependency
+npm run test:integration   # 13 — the one place a real Postgres runs
 ```
 
 Written driver-first, outside-in. The unit tier carries the adversarial SSRF cases, the scorer
-(exhaustively, including the every-check-errored case that naively divides by zero), and id
-generation. Simulated checks take an injected `Clock` and `Random`, so a requirement for randomized
-results does not make the test suite flaky.
+(exhaustively, including the every-check-errored case that naively divides by zero), the runner's
+timeout and containment behaviour, and id generation. Simulated checks take an injected `Clock` and
+`Random`, so a requirement for randomized results does not make the test suite flaky — the pipeline
+tests seed the generator and assert exact durations.
 
 RabbitMQ is faked at the port: the broker's own delivery semantics are Rabbit's to guarantee, not
 ours. What has to be proven is that *our* consumer is safe when it redelivers — which is why the
 most important test in the suite is that the same event delivered twice produces exactly one set of
-`scan_check` rows.
+`scan_check` rows. It drives the real units in the real order (`repository.submit` →
+`outbox.drainAndPublish` → `createProcessScan`) against a real database.
+
+That test is also the clearest argument for writing it outside-in. It was written first and left
+skipped, and when it came time to make it pass it *couldn't be*: the worker's handler was inline in
+`main.worker.ts`, where no test could reach it. So the handler became `createProcessScan` in
+`src/worker/process-scan.ts` and the composition root merely composes it. The test didn't document
+the design — it changed it.
 
 ---
 
@@ -232,9 +240,15 @@ is not retry: a transient blip that a single retry would have absorbed currently
 Bounded redelivery with backoff is the next piece of hardening, and `MAX_REDELIVERIES` is already
 declared for it.
 
+**One known piece of internal debt.** `src/utils/delay.utils.ts` is not abortable, so the simulated
+checks carry their own private abortable sleep. House convention says a primitive like that gets
+wrapped once in shared utils; consolidating it is a pure refactor with no behavioural change, and it
+was deliberately not done while the pipeline was the only thing standing between us and a working
+system.
+
 With a longer clock, in order: real check adapters and the redirect chain, the list endpoint, the DLQ
-consumer and replay script, per-URL result caching, and OpenTelemetry traces wired to the
-correlation id that already flows through every log line.
+consumer and replay script, per-URL result caching, the abortable-sleep consolidation, and
+OpenTelemetry traces wired to the correlation id that already flows through every log line.
 
 ---
 

@@ -42,8 +42,13 @@ services:
             postgres: { condition: service_healthy }
         restart: 'no'
 
+
+    # ADR-0012: a lost broker connection exits the process on purpose, because the supervisor already
+    # implements restart-with-backoff correctly. That contract only holds if a supervisor actually
+    # exists — without this line the processes exit and never come back, which verification caught.
     api:
         build: .
+        restart: unless-stopped
         command: ['node', 'dist/main.api.js']
         env_file: [.env.docker]
         ports: ['3000:3000']
@@ -54,6 +59,7 @@ services:
 
     relay:
         build: .
+        restart: unless-stopped
         command: ['node', 'dist/main.relay.js']
         env_file: [.env.docker]
         depends_on:
@@ -63,6 +69,7 @@ services:
 
     worker:
         build: .
+        restart: unless-stopped
         command: ['node', 'dist/main.worker.js']
         env_file: [.env.docker]
         depends_on:

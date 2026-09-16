@@ -447,3 +447,45 @@ IPv4-compatible IPv6.
 running service — everything below them is completeness. Shipping with 9.3–9.8 open and *named in
 the README's trade-offs* is a defensible position; shipping with 9.1 open and unmentioned is not,
 because the ADR claims a post-resolution re-check the code does not perform.
+
+---
+
+## Phase 10 — live sanity-flow verification (`docker compose up`, HEAD `20e5000`)
+
+Second verification pass, run against the **running stack**, not the source. `tsc` clean, 70 unit
+tests green. Where a finding was observed live, the observation is quoted.
+
+### Verified working — claims that hold up
+
+| Claim | Evidence |
+|---|---|
+| **One command to run** | `docker compose up -d --build` → postgres + rabbitmq healthy, `migrate` exited 0, three services started. |
+| README's dev key is real | `sha256('dev-key')` == the `API_KEYS` hash in `.env.docker`. The documented curl works. |
+| Status codes | `401` no key · `401` bad key · `400` missing body · `400` malformed JSON · `400`×5 SSRF rejections · `404` unknown id · `201` create. `{ error: string }` on every one. |
+| Idempotency (ADR-0003) | Same key + same body → `200` with the **original** id. Same key + different body → `409`. Exactly the specified semantics. |
+| Tenant isolation | Another client's scan id → `404`, not `403` — no existence leak. |
+| **Outbox absorbs a broker outage (ADR-0001)** | With RabbitMQ *and* the relay dead, `POST` still returned `201`. On restart both stalled scans completed **within 1s**, no lost events. The central architectural claim is verified live. |
+| Scorer math | Live scan: `domain_age` fail (100) + `ssl_certificate` pass (0), weights 4/3 → `round(400/7) = 57`, verdict `suspicious` (30 ≤ 57 < 70). Matches the table exactly. |
+| Pipeline end to end | `pending → in_progress → completed`, `startedAt`/`completedAt` set, per-check outcomes + details + durations returned. |
+
+### Findings, ranked
+
+| # | sev | Finding | Fix |
+|---|---|---|---|
+| 10.1 | **high** | **Nothing restarts the relay or worker.** Both log `"broker connection lost, exiting for restart"` and exit — but `restart:` appears exactly once in `docker-compose.yml`, on `migrate` (`'no'`). Observed live: the broker cycled, both exited `(1)`, and **stayed dead**, while every subsequent `POST` kept returning `201`. The code assumes a supervisor that does not exist. | `restart: unless-stopped` on `api`, `relay`, `worker`. One line each. |
+| 10.2 | **high** | **`/health` returned `200 {"status":"ok"}` with the broker down, the relay dead and the worker dead.** It is liveness-only; the plan promised "liveness + readiness with a DB probe". With 10.1 this is the doctrine's worst case — the system stops scanning while every signal says fine. | Split readiness from liveness; probe DB + broker, and consider unpublished-outbox lag. |
+| 10.3 | **high** | **Stuck `in_progress`, no lease.** A worker that dies between `claimForProcessing` (pending→in_progress) and `completeScan` leaves the scan `in_progress` forever: the redelivery hits `already-handled` → ack and drop. **The plan's own acceptance step — "kill the worker mid-scan and confirm the scan still completes" — would fail.** Read-confirmed; not executed live (the stack was being cycled by another session). | Make the claim a lease: also claim when `status = in_progress AND startedAt < now() - lease`. Or a sweeper that fails stale claims. |
+| 10.4 | **high** | **Relay head-of-line blocking with no escape.** An unroutable event throws inside `drainAndPublish`, the transaction rolls back, `tick` logs, sleeps, and retries **the same batch forever**. Rows are `ORDER BY id ASC`, so the poison row is always in the batch — one bad event blocks **every** later event permanently. Consumer poison has a DLQ; relay poison has nothing. | Add an attempts/last_error column; skip or dead-letter a row past N failures so the rest of the batch drains. |
+| 10.5 | medium | **`failScan` has zero call sites.** Dead code — and the plan's "the scan goes `failed`" never happens. A dead-lettered scan stays `pending` forever with no error recorded anywhere. | Call it on the dead-letter path, or delete it and stop claiming the behaviour. |
+| 10.6 | medium | **`MAX_REDELIVERIES` is read from config and never used.** Every failure path is `nack(msg, false, false)` — immediate dead-letter on the **first** failure, so one transient DB blip permanently discards a scan. Phase 5 admits the retry ladder was cut, but a config knob implies a bound that does not exist. | Implement the ladder, or remove the knob so config does not describe absent behaviour. |
+| 10.7 | medium | **No DLQ consumer.** `dlq_event` table and the `scan.dead` routing key exist; nothing writes to or reads from them. Dead-lettered messages accumulate invisibly in the broker. | Phase 5 completion, or state the gap in the README next to the table that implies it. |
+| 10.8 | medium | **No status transition table.** `domain/scan/status.ts` was promised ("a one-way lattice enforced by a transition table") and does not exist. `completeScan` and `failScan` both `UPDATE … WHERE id = $1` with no status predicate, so a late `completeScan` can overwrite a `failed` scan — terminal states are not terminal, and the doctrine's stale-update guard is missing on the write path. | Add the table; add `AND status = 'in_progress'` to both terminal writes. |
+| 10.9 | **high** | **Phase 9.1 / 9.2 are still open, and now confirmed live:** `isBlockedIpAddress` still has zero call sites, and `http://localhost/`, `http://metadata.google.internal/` and `http://[64:ff9b::7f00:1]/` were all accepted with `201` **and scanned to completion** — the localhost scan came back `completed`, score 29, verdict `clean`. | See Phase 9. The cheap half (literal hostname denylist) is minutes. |
+
+### If the clock beats these
+
+**10.1 and 10.2 are the highest grade-to-effort ratio in the whole backlog** — two lines of compose
+and a readiness probe, and together they close the "silently stops working" failure that an
+interviewer at a security company will look for. 10.3 and 10.4 are the two that a reviewer reading
+the ADRs will actively go hunting for, because the ADRs claim the properties they break. 10.5–10.8
+are honest README trade-offs if named; 10.9 must not ship unmentioned.

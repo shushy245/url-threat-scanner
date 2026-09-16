@@ -2,39 +2,23 @@
 
 **Status:** accepted · **Date:** 2026-09-16
 
-## Context
+**Issue.** The architecture has three distinct jobs — accept submissions, move events to the broker,
+run checks. One process or several?
 
-The outbox architecture has three distinct jobs: accept submissions, move events to the broker, and
-run checks. They could be one process or several.
+**Decision.** Three deployables from one codebase (`api`, `relay`, `worker`), each with its own
+composition root. The argument is scaling signals, not tidiness: the API is bound by request
+concurrency, the relay by Postgres throughput, the worker by network I/O to check services — and a
+slow WHOIS lookup must never starve the API's event loop. Event payloads are **explicit, versioned
+Zod schemas** (`ScanRequestedV1`) parsed on receive, never a shared TypeScript type: producer and
+consumer deploy at different times, so a compile-time type is a promise nothing enforces at the
+moment it matters. It drifts silently across a version skew; a parsed schema fails loudly at the
+boundary, naming the field.
 
-## Decision
+**Trade-offs.** Gained: independent scaling and failure, unparseable events dead-letter at the edge,
+rolling deploys across a skew are safe. Cost: three services to run and observe — Compose hides that
+from a reviewer, but it's real operational surface. If the relay proved noisy, the port boundary makes
+folding it into the API a deployment decision rather than a rewrite.
 
-**Three separate deployables from one codebase** — `api`, `relay`, `worker` — each with its own
-composition root where dependencies are constructed and config is read.
-
-They scale on different signals, which is the substance of the argument rather than tidiness: the
-API is bound by request concurrency, the relay by Postgres throughput, the worker by network I/O to
-external check services. A slow WHOIS lookup must not be able to starve the API's event loop. This
-is cheap to establish now and expensive to retrofit once modules assume shared process state.
-
-**Event payloads are explicit, versioned Zod schemas** (`ScanRequestedV1`), parsed on receive —
-never an implicit TypeScript type shared by import. Producer and consumer are separate deployables
-and will be deployed at different times, so a shared compile-time type is a promise that nothing
-enforces at the moment it matters: it drifts silently across a version skew and fails somewhere
-downstream with a confusing symptom. A parsed schema fails loudly, at the boundary, naming the field.
-
-## Consequences
-
-**Easier:** independent scaling and independent failure; an unparseable event dead-letters at the
-edge instead of corrupting a scan; rolling deploys across a version skew are safe by construction.
-
-**Harder:** three services to run, observe, and reason about. Docker Compose hides that from a
-reviewer but it is real operational surface. If operating the relay proved noisy I would fold it
-into the API deployment as a separate module — the port boundary keeps that a deployment decision
-rather than a rewrite.
-
-## In one breath
-
-*Three processes because they scale on different signals and a slow check must never starve the API,
-and versioned event schemas parsed on receive because producer and consumer ship separately — a
-shared TypeScript type is a promise nothing enforces across a version skew.*
+**In one breath.** *Three processes because they scale on different signals and a slow check must
+never starve the API, and versioned schemas parsed on receive because producer and consumer ship
+separately — a shared TypeScript type is a promise nothing enforces across a version skew.*

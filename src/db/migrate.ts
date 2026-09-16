@@ -1,15 +1,15 @@
 import path from 'node:path';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 
-import { loadConfig } from '../config';
 import { createDatabase } from './client';
+import { loadDatabaseConfig } from '../config';
 
 /**
  * Forward-only migrations, run as a one-shot before any service starts (see docker-compose.yml).
  * Gating the app services on this completing is what stops `docker compose up` racing the schema.
  */
 const run = async (): Promise<void> => {
-    const config = loadConfig();
+    const config = loadDatabaseConfig();
     const { db, pool } = createDatabase({ connectionString: config.DATABASE_URL });
 
     try {

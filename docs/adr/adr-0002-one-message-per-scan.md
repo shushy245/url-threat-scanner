@@ -2,39 +2,19 @@
 
 **Status:** accepted · **Date:** 2026-09-16
 
-## Context
+**Issue.** A scan runs several independent checks. That's either one unit of work or many.
 
-A scan runs several independent checks. They could be one unit of work or many.
+**Decision.** One `ScanRequested` message per scan. The worker claims it, runs all checks with
+`Promise.allSettled` and a per-check timeout, and writes every check row, the score and the terminal
+status in a single transaction. Rejected: one message per `(scan, check)`. Per-check retry and
+isolation are real benefits, but they require something to decide "all checks are done now", and
+that decision races under concurrent workers — producing scans stuck in `in_progress` forever, the
+worst failure mode here and the hardest to reproduce.
 
-## Decision
+**Trade-offs.** Gained: no fan-in race, one write per entity per flow, a scan is atomically complete
+or not. Cost: one slow check delays the whole scan (bounded by the timeout), and a redelivery re-runs
+checks that already passed — wasted work, not wrong results. Escape hatch if per-check cost
+diverges: message per check plus a completion counter on the scan row, last writer transitions it.
 
-**One `ScanRequested` message per scan.** The worker claims the scan, runs every check via
-`Promise.allSettled` with a per-check timeout, and writes all `scan_check` rows, the threat score,
-and the terminal status **in a single transaction**.
-
-Rejected: one message per `(scan, check)` with a fan-in aggregation step. That buys per-check retry,
-isolation, and independent scaling per check type — real benefits. It costs a completion-detection
-step: something must decide "all checks are done now," and under concurrent workers that decision
-races. Getting it wrong produces scans stuck in `in_progress` forever, which is both the worst
-failure mode here and the hardest to reproduce.
-
-One message also means **one status transition and one write per entity per flow**, which is the
-property that makes the whole pipeline easy to reason about.
-
-## Consequences
-
-**Easier:** no aggregation race; a scan is atomically complete or not; the pipeline is a pure
-function of its checks and trivially testable.
-
-**Harder:** one slow check delays the whole scan (bounded by the per-check timeout), and a
-redelivery re-runs checks that already succeeded — wasted work, not incorrect work, since the
-transaction is all-or-nothing.
-
-**Migration path, if per-check cost diverges:** message per check + a completion counter on the scan
-row, incremented in the same transaction as each check's result, with the last writer transitioning
-the scan. Documented now so the escape hatch is a known shape rather than a redesign.
-
-## In one breath
-
-*One message per scan with the checks running concurrently inside it, because the alternative's
-per-check retry isn't worth introducing a fan-in race that strands scans in `in_progress`.*
+**In one breath.** *One message per scan with the checks concurrent inside it, because the
+alternative's per-check retry isn't worth a fan-in race that strands scans in `in_progress`.*
