@@ -15,7 +15,7 @@ describe('the scanning pipeline, end to end', () => {
     beforeEach(async () => driver.given.aCleanDatabase());
     afterAll(async () => driver.close());
 
-    it.skip('carries a submitted url from pending through to a completed scan with check results', async () => {
+    it('carries a submitted url from pending through to a completed scan with check results', async () => {
         await driver.when.urlIsSubmitted('https://pipeline.example.com/a');
         await driver.when.theRelayDrains();
         await driver.when.theWorkerConsumes();
@@ -25,7 +25,7 @@ describe('the scanning pipeline, end to end', () => {
         await driver.assert.threatScoreWithinBounds();
     });
 
-    it.skip('records one set of check results when the same event is delivered twice', async () => {
+    it('records one set of check results when the same event is delivered twice', async () => {
         await driver.when.urlIsSubmitted('https://redelivery.example.com/a');
         await driver.when.theRelayDrains();
         await driver.when.theWorkerConsumes();

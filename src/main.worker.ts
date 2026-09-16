@@ -1,15 +1,13 @@
 import { loadConfig } from './config';
 import { createDatabase } from './db/client';
 import { createLogger } from './utils/logger';
-import { runChecks } from './checks/run-checks';
 import { systemClock } from './utils/clock.utils';
-import { scoreScan } from './checks/scoring.utils';
 import { systemRandom } from './utils/random.utils';
 import { startScanConsumer } from './messaging/consumer';
+import { createProcessScan } from './worker/process-scan';
 import { connectAmqp, declareTopology } from './messaging/amqp';
 import { createScanRepository } from './repositories/scan.repository';
 import { createSimulatedChecks } from './checks/create-simulated-checks';
-import { scanRequestedPayloadSchema } from './events/scan-requested.event';
 import {
     SCAN_DEAD_LETTER_EXCHANGE,
     SCAN_DEAD_ROUTING_KEY,
@@ -54,58 +52,13 @@ const main = async (): Promise<void> => {
 
     await startScanConsumer({
         channel: connection.channel,
-        handle: async ({ payload, correlationId }) => {
-            const parsed = scanRequestedPayloadSchema.safeParse(payload);
-
-            if (!parsed.success) {
-                logger.error(
-                    { correlationId, issues: parsed.error.issues },
-                    'processScan: payload does not match ScanRequested v1, dead-lettering',
-                );
-
-                return 'unprocessable';
-            }
-
-            const { scanId, clientId } = parsed.data;
-            const ctx = { clientId, correlationId, scanId };
-
-            const claim = await repository.claimForProcessing(scanId);
-
-            if (claim.kind === 'missing') {
-                logger.error(ctx, 'processScan: no such scan, dead-lettering');
-
-                return 'unprocessable';
-            }
-
-            if (claim.kind === 'already-handled') {
-                // The idempotency guarantee doing its job: a redelivery finds the scan no longer
-                // pending, so it changes nothing and the message is acked.
-                logger.info({ ...ctx, status: claim.status }, 'processScan: already handled, dropping redelivery');
-
-                return 'handled';
-            }
-
-            logger.info({ ...ctx, domain: claim.domain }, 'processScan: claimed, running checks');
-
-            const results = await runChecks({
-                checks,
-                clock: systemClock,
-                domain: claim.domain,
-                normalizedUrl: claim.normalizedUrl,
-                timeoutMs: config.CHECK_TIMEOUT_MS,
-            });
-
-            const { threatScore, verdict } = scoreScan(results);
-
-            logger.info(
-                { ...ctx, checkCount: results.length, threatScore, verdict },
-                'processScan: checks complete, writing results',
-            );
-
-            await repository.completeScan({ checks: results, scanId, threatScore, verdict });
-
-            return 'handled';
-        },
+        handle: createProcessScan({
+            checkTimeoutMs: config.CHECK_TIMEOUT_MS,
+            checks,
+            clock: systemClock,
+            logger,
+            repository,
+        }),
         logger,
         prefetch: config.WORKER_PREFETCH,
     });

@@ -14,6 +14,13 @@ export default [
         },
     },
 
+    // Boundary: tool configs are loaded BY their tool, which requires a default export. The rule is
+    // unsatisfiable here rather than wrong, which is the documented case for a scoped override.
+    {
+        files: ['vitest.workspace.ts', 'drizzle.config.ts', '*.config.ts', '*.config.mjs'],
+        rules: { 'import/no-default-export': 'off' },
+    },
+
     {
         files: ['src/**/*.ts'],
         languageOptions: {

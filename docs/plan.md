@@ -273,10 +273,10 @@ Sequenced so the submission is coherent at **any** cut point — each phase ends
 | 2 | Submit + read | ✅ done | `POST /v1/scans` (+ `Idempotency-Key`), `GET /v1/scans/:id`, Zod middleware, SSRF guard, error handler. **Scan + outbox row commit together** |
 | 3 | Messaging | ✅ done | amqp wrapper (dead-letter config mandatory in the options type), `ScanRequestedV1`, outbox relay, consumer with CAS claim. **Event flows end to end** |
 | 4 | Pipeline | ✅ done | Check port + registry + 2 simulated checks, scorer, status transitions. **Working system** |
-| 5 | Hardening | ⬜ todo | Bounded redelivery, DLQ consumer → `dlq_event`, per-check timeouts, partial results, API-key auth |
-| 6 | List endpoint | ⬜ todo | Pagination + sort + filter |
-| 7 | README | ⬜ todo | Setup, architecture, decisions, trade-offs — a **first-class deliverable**, not a footnote |
-| 8 | Stretch | ⬜ todo | Real RDAP + TLS adapters · redirect-chain check · DLQ replay script |
+| 5 | Hardening | ⚠️ partial — dead-letter type + AbortController timeout only; retry ladder cut | Bounded redelivery, DLQ consumer → `dlq_event`, per-check timeouts, partial results, API-key auth |
+| 6 | List endpoint | ❌ cut for time | Pagination + sort + filter |
+| 7 | README | ✅ done | Setup, architecture, decisions, trade-offs — a **first-class deliverable**, not a footnote |
+| 8 | Stretch | ❌ cut for time — CHECK_MODE=real throws rather than faking | Real RDAP + TLS adapters · redirect-chain check · DLQ replay script |
 
 **This table is the task list and its live status.** Each phase ends green, lint-clean and
 committed; the status column is updated in the same commit, so `git log` and this table never
