@@ -1,11 +1,10 @@
 # Architecture Decision Records
 
-One file per crossroads. Each records the **context** (what forced the decision), the **decision**
-(what was chosen and why, including what was rejected), and the **consequences** (what gets easier,
-what gets harder).
+One file per crossroads, each a 20-second read: **issue** (what forced the decision), **decision**
+(what was chosen, and what was rejected), **trade-offs** (what got easier, what it costs), and a
+single **in one breath** sentence.
 
-Every ADR ends with an **In one breath** line — the single sentence that carries the decision out
-loud. A decision that cannot survive that compression is not understood well enough to defend.
+If a decision can't compress to that sentence, it isn't understood well enough to defend.
 
 | ADR | Decision |
 |---|---|
