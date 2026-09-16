@@ -266,17 +266,21 @@ Errors are always `{ error: string }` with correct status codes.
 
 Sequenced so the submission is coherent at **any** cut point — each phase ends green and committed.
 
-| # | Phase | Contents |
-|---|---|---|
-| 0 | Scaffold | `/project-init` (CLAUDE.md, eslint stub, husky, VS Code), `docker-compose.yml` (postgres + rabbitmq + 3 services), Dockerfile, config, logger, `docs/plan.md`, the six ADRs |
-| 1 | Schema + repo | Drizzle schema, first migration, `ScanRepository` + port, `generateUniqueId` |
-| 2 | Submit + read | `POST /v1/scans` (+ `Idempotency-Key`), `GET /v1/scans/:id`, Zod middleware, SSRF guard, error handler. **Scan + outbox row commit together** |
-| 3 | Messaging | amqp wrapper (dead-letter config mandatory in the options type), `ScanRequestedV1`, outbox relay, consumer with CAS claim. **Event flows end to end** |
-| 4 | Pipeline | Check port + registry + 2 simulated checks, scorer, status transitions. **Working system** |
-| 5 | Hardening | Bounded redelivery, DLQ consumer → `dlq_event`, per-check timeouts, partial results, API-key auth |
-| 6 | List endpoint | Pagination + sort + filter |
-| 7 | README | Setup, architecture, decisions, trade-offs — a **first-class deliverable**, not a footnote |
-| 8 | Stretch | Real RDAP + TLS adapters · redirect-chain check · DLQ replay script |
+| # | Phase | Status | Contents |
+|---|---|---|---|
+| 0 | Scaffold | ✅ done | package/tsconfig/eslint, `docker-compose.yml` (postgres + rabbitmq + 3 services + one-shot migrate), Dockerfile, `docs/plan.md`, the six ADRs |
+| 1 | Schema + repo | ⬜ todo | Drizzle schema, first migration, `ScanRepository` + port, `generateUniqueId` |
+| 2 | Submit + read | ⬜ todo | `POST /v1/scans` (+ `Idempotency-Key`), `GET /v1/scans/:id`, Zod middleware, SSRF guard, error handler. **Scan + outbox row commit together** |
+| 3 | Messaging | ⬜ todo | amqp wrapper (dead-letter config mandatory in the options type), `ScanRequestedV1`, outbox relay, consumer with CAS claim. **Event flows end to end** |
+| 4 | Pipeline | ⬜ todo | Check port + registry + 2 simulated checks, scorer, status transitions. **Working system** |
+| 5 | Hardening | ⬜ todo | Bounded redelivery, DLQ consumer → `dlq_event`, per-check timeouts, partial results, API-key auth |
+| 6 | List endpoint | ⬜ todo | Pagination + sort + filter |
+| 7 | README | ⬜ todo | Setup, architecture, decisions, trade-offs — a **first-class deliverable**, not a footnote |
+| 8 | Stretch | ⬜ todo | Real RDAP + TLS adapters · redirect-chain check · DLQ replay script |
+
+**This table is the task list and its live status.** Each phase ends green, lint-clean and
+committed; the status column is updated in the same commit, so `git log` and this table never
+disagree.
 
 Phases 0–4 are the spine; if time runs out mid-7, the README still ships by being written against
 what exists. Phase 3 is the one that grew when we chose a real broker — it is also the phase that
@@ -324,3 +328,84 @@ You have to explain this work to someone else, so documentation is written for t
 - **Rate limiting is deliberately absent** (ADR-0004) — if you'd rather ship an in-process limiter
   despite the false-confidence argument, it's ~10 minutes in phase 5.
 - The per-URL result cache from ADR-0003 is the named next optimization, not a hidden gap.
+
+---
+
+## Story `url-threat-scanner` — Cases
+
+The TDD checklist. Enumerated before implementation, because domain knowledge is cheapest to
+extract at planning time — a missing "what happens on X + Y?" is a plan line here, not a bug found
+in review later. `[P]` marks a case that came out of the pre-mortem rather than the spec.
+
+### Submission
+- Given a valid URL, when submitted, then `201` with a scan id and the scan persists as `pending`.
+- Given a valid URL, when submitted, then the scan row and its outbox row commit in ONE transaction.
+- Given an invalid URL / missing body, when submitted, then `400 { error }` and nothing persists.
+- Given no API key, when submitted, then `401` and nothing persists.
+- Given an `Idempotency-Key` already used by that client, when resubmitted with the same body, then
+  `200` with the ORIGINAL scan id and no second outbox row.
+- Given an `Idempotency-Key` already used by that client, when resubmitted with a DIFFERENT body,
+  then `409`.
+- `[P]` Given two identical submissions racing concurrently with the same key, when both commit,
+  then exactly one scan exists — the unique index arbitrates, not a read-then-write.
+
+### SSRF guard
+- Rejects non-`http(s)` schemes (`file:`, `gopher:`, `javascript:`).
+- Rejects credentials-in-URL (`https://user:pass@host`).
+- Rejects private / loopback / link-local literals: `127.0.0.1`, `10.0.0.1`, `192.168.1.1`,
+  `169.254.169.254` (cloud metadata), `[::1]`, `[fd00::1]`.
+- `[P]` Rejects obfuscated loopback encodings: `2130706433`, `0x7f.0.0.1`, `017700000001`.
+- `[P]` Rejects a public hostname that RESOLVES to a private address (DNS rebinding) — the guard
+  must re-check after resolution, not only on the literal.
+
+### Outbox + relay
+- Given unpublished outbox rows, when the relay drains, then they publish and are marked published.
+- `[P]` Given the broker rejects/times out the publish, then `published_at` stays NULL and the row
+  is retried on the next drain — **the mark must not happen before the publisher confirm**.
+  (`channel.publish()` returning `true` is flow control, NOT a delivery guarantee.)
+- `[P]` Given two relay instances draining concurrently, then no outbox row is published twice —
+  `FOR UPDATE SKIP LOCKED` inside the same transaction as the mark.
+- Given RabbitMQ is down, when a URL is submitted, then the API still returns `201` and the event
+  drains once the broker returns.
+
+### Consumer idempotency
+- Given a `ScanRequested` event, when consumed, then the scan moves `pending → in_progress`.
+- **Given the SAME event delivered twice, then exactly one set of `scan_check` rows exists** — the
+  single most important test in the suite.
+- `[P]` Given the CAS claim returns zero rows, then distinguish the two causes: scan row *present
+  but not pending* → already handled, ack and drop; scan row *absent* → genuine fault, dead-letter.
+  Collapsing both into "ack and drop" silently discards real work.
+- Given a malformed / unknown-version event payload, then it dead-letters rather than crashing the
+  consumer.
+- Given redeliveries past `MAX_REDELIVERIES`, then the message lands in `dlq_event` and the scan is
+  `failed`.
+
+### Check pipeline
+- Given all checks pass, then the scan completes with a low score and a `clean` verdict.
+- Given a failing check, then its outcome is `fail` and the score rises by that check's weight.
+- Given one check throws, then it records outcome `error`, the OTHER checks still record, and the
+  scan still **completes** — a WHOIS outage must not blackhole every scan.
+- `[P]` Given EVERY check errors, then the score is not `NaN` — excluding errored checks from the
+  denominator divides by zero when the denominator is empty. Explicit branch required.
+- `[P]` Given a check hangs past `CHECK_TIMEOUT_MS`, then it records `error` AND the underlying work
+  is actually aborted — a bare `Promise.race` returns early but leaves the work running and the
+  timer holding the event loop open. AbortController + `clearTimeout` in a `finally`.
+- Given simulated checks with a seeded `Random` and a fixed `Clock`, then results are deterministic.
+
+### Query
+- `GET /v1/scans/:id` returns the scan with its per-check outcomes; unknown id → `404`, not `500`.
+- `GET /v1/scans` paginates by keyset, sorts server-side, and filters by status/verdict/domain.
+
+### Cross-cutting
+- `[P]` Submitted URLs may carry session tokens in the query string. Logs must record a **redacted**
+  URL — never the raw query. Doctrine: log sensitive operations, never sensitive values.
+- Graceful shutdown: `SIGTERM` closes the channel so in-flight messages requeue rather than being
+  lost with the process.
+
+Pre-mortem — the 5 bugs most likely to bite, written as red-first cases:
+
+1. Marking the outbox row published before the broker confirms. channel.publish() returning true is flow control, not a delivery guarantee — the trap is that it looks like success. Without a ConfirmChannel and an awaited confirm, a broker hiccup drops the event forever and the scan sits pending for eternity.
+2. "Zero rows from the CAS claim" is ambiguous. Row present but not pending means already handled → ack and drop. Row absent means a genuine fault → dead-letter. Collapsing both into "ack and drop" silently discards real work, and it's the natural way to write it.
+3. Timeouts that don't cancel. A bare Promise.race returns early but leaves the check running and the timer holding the event loop open. Needs AbortController plus clearTimeout in a finally.
+4. NaN threat score. "Errored checks are excluded from the denominator" divides by zero when every check errors. That NaN goes straight into a numeric column.
+5. Concurrency: two relay instances double-publishing — the drain must hold FOR UPDATE SKIP LOCKED in the same transaction as the mark.
