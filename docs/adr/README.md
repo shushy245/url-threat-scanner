@@ -19,3 +19,6 @@ loud. A decision that cannot survive that compression is not understood well eno
 | [0008](adr-0008-scan-status-union.md) | Scan status as a discriminated union; `unknown` ≠ `clean` |
 | [0009](adr-0009-auth-lookup-and-cross-client-reads.md) | Digest-keyed auth lookup; cross-client reads return 404 |
 | [0010](adr-0010-liveness-and-readiness.md) | Liveness and readiness are separate endpoints |
+| [0011](adr-0011-drain-holds-locks-across-publish.md) | The outbox drain holds row locks across the broker round-trip |
+| [0012](adr-0012-crash-only-restart.md) | Connection loss exits; the supervisor restarts |
+| [0013](adr-0013-test-strategy.md) | Real Postgres, faked broker, outside-in |
