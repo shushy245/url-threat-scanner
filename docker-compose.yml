@@ -11,7 +11,7 @@ services:
             POSTGRES_USER: scanner
             POSTGRES_PASSWORD: scanner
             POSTGRES_DB: scanner
-        ports: ['5432:5432']
+        ports: ['5433:5432'] # host 5433: 5432 is commonly taken by a local Postgres
         volumes: ['pgdata:/var/lib/postgresql/data']
         healthcheck:
             test: ['CMD-SHELL', 'pg_isready -U scanner -d scanner']

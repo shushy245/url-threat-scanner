@@ -4,3 +4,6 @@ dist/
 *.log
 coverage/
 .DS_Store
+
+# harness artifacts, not part of the submission
+.claude/
