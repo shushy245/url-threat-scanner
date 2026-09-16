@@ -271,8 +271,8 @@ Sequenced so the submission is coherent at **any** cut point — each phase ends
 | 0 | Scaffold | ✅ done | package/tsconfig/eslint, `docker-compose.yml` (postgres + rabbitmq + 3 services + one-shot migrate), Dockerfile, `docs/plan.md`, the six ADRs |
 | 1 | Schema + repo | ✅ done | Drizzle schema, first migration, `ScanRepository` + port, `generateUniqueId` |
 | 2 | Submit + read | ✅ done | `POST /v1/scans` (+ `Idempotency-Key`), `GET /v1/scans/:id`, Zod middleware, SSRF guard, error handler. **Scan + outbox row commit together** |
-| 3 | Messaging | 🟡 next | amqp wrapper (dead-letter config mandatory in the options type), `ScanRequestedV1`, outbox relay, consumer with CAS claim. **Event flows end to end** |
-| 4 | Pipeline | ⬜ todo | Check port + registry + 2 simulated checks, scorer, status transitions. **Working system** |
+| 3 | Messaging | ✅ done | amqp wrapper (dead-letter config mandatory in the options type), `ScanRequestedV1`, outbox relay, consumer with CAS claim. **Event flows end to end** |
+| 4 | Pipeline | ✅ done | Check port + registry + 2 simulated checks, scorer, status transitions. **Working system** |
 | 5 | Hardening | ⬜ todo | Bounded redelivery, DLQ consumer → `dlq_event`, per-check timeouts, partial results, API-key auth |
 | 6 | List endpoint | ⬜ todo | Pagination + sort + filter |
 | 7 | README | ⬜ todo | Setup, architecture, decisions, trade-offs — a **first-class deliverable**, not a footnote |

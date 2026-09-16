@@ -3,11 +3,17 @@ import { and, eq } from 'drizzle-orm';
 import type { Database } from '../db/client';
 import { fromRows } from '../domain/scan/translator';
 import { generateUniqueId } from '../utils/id.utils';
-import type { ScanModel } from '../domain/scan/model';
 import { isUniqueViolation } from '../utils/postgres-error.utils';
 import { outboxEventTable, scanCheckTable, scanTable } from '../db/schema';
-import type { ScanRepositoryPort, SubmitScanInput, SubmitScanResult } from './scan.repository.port';
+import { type ScanModel, ScanStatus, type Verdict } from '../domain/scan/model';
 import { SCAN_REQUESTED_EVENT_TYPE, SCAN_REQUESTED_EVENT_VERSION } from '../events/scan-requested.event';
+import type {
+    ClaimResult,
+    CompletedCheck,
+    ScanRepositoryPort,
+    SubmitScanInput,
+    SubmitScanResult,
+} from './scan.repository.port';
 
 const IDEMPOTENCY_CONSTRAINT = 'scan_client_idempotency_key_uq';
 const SCAN_AGGREGATE = 'scan';
@@ -118,5 +124,80 @@ export const createScanRepository = ({ db }: { db: Database }): ScanRepositoryPo
         return fromRows({ checks, scan });
     };
 
-    return { findById, submit };
+    const claimForProcessing = async (scanId: string): Promise<ClaimResult> => {
+        const claimed = await db
+            .update(scanTable)
+            .set({ startedAt: new Date(), status: ScanStatus.InProgress, updatedAt: new Date() })
+            .where(and(eq(scanTable.id, scanId), eq(scanTable.status, ScanStatus.Pending)))
+            .returning({ domain: scanTable.domain, normalizedUrl: scanTable.normalizedUrl });
+
+        const [row] = claimed;
+        if (row !== undefined) {
+            return { domain: row.domain, kind: 'claimed', normalizedUrl: row.normalizedUrl };
+        }
+
+        // Zero rows changed. Disambiguate rather than guess — see ClaimResult.
+        const [existing] = await db
+            .select({ status: scanTable.status })
+            .from(scanTable)
+            .where(eq(scanTable.id, scanId))
+            .limit(1);
+
+        if (existing === undefined) return { kind: 'missing' };
+
+        return { kind: 'already-handled', status: existing.status };
+    };
+
+    const completeScan = async ({
+        scanId,
+        checks,
+        threatScore,
+        verdict,
+    }: {
+        scanId: string;
+        checks: readonly CompletedCheck[];
+        threatScore: number;
+        verdict: Verdict;
+    }): Promise<void> => {
+        await db.transaction(async (tx) => {
+            if (checks.length > 0) {
+                await tx.insert(scanCheckTable).values(
+                    checks.map((check) => ({
+                        checkId: check.checkId,
+                        details: check.details,
+                        durationMs: check.durationMs,
+                        id: generateUniqueId('chk'),
+                        outcome: check.outcome,
+                        scanId,
+                        score: check.score,
+                    })),
+                );
+            }
+
+            await tx
+                .update(scanTable)
+                .set({
+                    completedAt: new Date(),
+                    status: ScanStatus.Completed,
+                    threatScore,
+                    updatedAt: new Date(),
+                    verdict,
+                })
+                .where(eq(scanTable.id, scanId));
+        });
+    };
+
+    const failScan = async ({ scanId, error }: { scanId: string; error: string }): Promise<void> => {
+        await db
+            .update(scanTable)
+            .set({
+                completedAt: new Date(),
+                error,
+                status: ScanStatus.Failed,
+                updatedAt: new Date(),
+            })
+            .where(eq(scanTable.id, scanId));
+    };
+
+    return { claimForProcessing, completeScan, failScan, findById, submit };
 };
