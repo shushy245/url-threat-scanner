@@ -6,18 +6,16 @@
 queue, outbox, idempotency, scoring, error semantics — is identical either way, and time is short.
 
 **Decision.** Ship simulated checks behind the exact `CheckRunner` port the real ones implement,
-registered in a `Record<CheckId, CheckRunner>` so a new check is a table entry, never a new branch.
-The implementation is chosen at the composition root by `CHECK_MODE`, so going real is a config flag
-plus one file — nothing downstream knows which is in use. The non-obvious part: **the randomness is
-injected.** Simulated checks take `Clock` and `Random` ports, because the brief asks for random
-results *and* for pipeline tests, and those conflict unless randomness is a dependency. Ambient
-`Math.random()` would have produced a suite that fails one run in twenty for reasons no one can
-reproduce.
+registered in a `Record<CheckId, CheckRunner>` so a new check is a table entry, not a new branch. The
+implementation is picked at the composition root by `CHECK_MODE`; nothing downstream knows which is
+in use. The non-obvious part: **the randomness is injected.** Checks take `Clock` and `Random` ports,
+because the brief asks for random results *and* pipeline tests — which conflict unless randomness is
+a dependency. Ambient `Math.random()` would fail one run in twenty for reasons no one can reproduce.
 
-**Trade-offs.** Gained: the pipeline runs end-to-end from day one with fast, deterministic tests, and
-real checks land without touching it. Cost: the simulations prove the plumbing, not the parsing — the
-real adapters carry WHOIS rate limits, inconsistent response formats, TLS handshake edges and SSRF
-exposure on the redirect chain. A green pipeline here does **not** mean the real checks work.
+**Trade-offs.** The pipeline runs end-to-end from day one with fast, deterministic tests, and real
+checks land without touching it. The cost: simulations prove the plumbing, not the parsing — real
+adapters carry WHOIS rate limits, inconsistent formats, TLS edge cases. A green pipeline here does
+**not** mean the real checks work.
 
 **In one breath.** *Checks sit behind a port with simulated and real chosen by config, and the
 simulation's randomness is injected rather than ambient — otherwise the same requirement that asked

@@ -226,7 +226,10 @@ are already sortable, but it is not built. It was the right thing to cut: nothin
 
 **Checks are simulated** (ADR-0005). Both sit behind the port the real ones implement, selected by
 `CHECK_MODE`, so the real RDAP (`rdap.verisign.com`) and native-TLS adapters are a drop-in rather
-than a refactor. The redirect-chain check — the brief's bonus — is the same shape and is where I
+than a refactor. Setting `CHECK_MODE=real` today makes the worker **refuse to start**, with a message
+naming ADR-0005 — deliberately, rather than silently falling back to simulated results. A scanner
+that reports fabricated findings while appearing to work is the worst failure this system could
+have; failing loudly at boot is the only honest option. The redirect-chain check — the brief's bonus — is the same shape and is where I
 would go next.
 
 **The dead-letter queue exists; the consumer that drains it does not.** A message whose handler
@@ -262,7 +265,7 @@ to boot on a bad value rather than failing later at the first request.
 | `PORT` | `3000` | API listen port |
 | `DATABASE_URL` | — | Postgres connection string (required) |
 | `RABBITMQ_URL` | — | Broker connection string (required) |
-| `CHECK_MODE` | `simulated` | `simulated` or `real` |
+| `CHECK_MODE` | `simulated` | `simulated`; `real` refuses to start until the adapters exist |
 | `CHECK_TIMEOUT_MS` | `5000` | Per-check timeout; the work is aborted, not just abandoned |
 | `WORKER_PREFETCH` | `10` | Unacked messages per worker |
 | `MAX_REDELIVERIES` | `10` | Declared for the retry ladder; **not yet enforced** — see trade-offs |

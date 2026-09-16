@@ -2,43 +2,21 @@
 
 **Status:** accepted · **Date:** 2026-09-16
 
-## Context
+**Issue.** A scan gains fields as it progresses — `startedAt`, then `completedAt`, `threatScore`,
+`verdict`. The obvious model is one flat type with those fields optional.
 
-A scan accumulates fields as it progresses: `startedAt` when work begins, then `completedAt`,
-`threatScore` and `verdict` when it finishes. The obvious model is one flat type with those fields
-optional.
+**Decision.** A discriminated union: their presence *depends on* status, which makes them variants,
+not optionals. Flat optionals admit states that can't exist (a `completed` scan with no score) and
+force consumers to re-check fields inside a branch that already knows the status. With a union, one
+guard narrows and every access after it is direct. The database can't express this, so the translator
+switches on status and **throws loudly** if a row lacks the columns its status requires. Separately:
+`unknown` ≠ `clean`. When every check errors the scan completes but produced no signal — calling that
+`clean` would be the most dangerous bug this service could ship.
 
-## Decision
+**Trade-offs.** Illegal states are unrepresentable and the compiler catches a missing branch when a
+status is added. The cost: the translator is more code than a field copy, and each new status needs a
+variant plus its branch — the compiler asking a question that would otherwise go unasked.
 
-**Model status as a discriminated union.** The presence of `threatScore`, `verdict` and `completedAt`
-*depends on* the value of `status` — that is a variant, not an optional.
-
-The flat-optional version admits states that cannot exist: a `completed` scan with no score, a
-`pending` scan with a `completedAt`. Worse, it forces every consumer to defensively re-check fields
-even inside a branch where it already knows the status. With a union, one guard narrows and every
-field access afterwards is direct — no optional chaining, no non-null assertions.
-
-The database cannot express this, so `fromRows` is where the two worlds meet: it switches on status
-and **throws loudly** if a row reached a status without the columns that status requires. A corrupt
-row is a real fault and should fail visibly at the boundary, not propagate as a half-built model that
-breaks somewhere unrelated.
-
-**Separately: `Verdict.Unknown` is distinct from `Verdict.Clean`.** When every check errors, the scan
-still *completes* — the pipeline worked — but it produced no signal. Reporting that as `clean` would
-be the single most dangerous bug this service could ship: a security product telling a user a URL is
-safe when what it means is that it could not tell. `unknown` says the true thing.
-
-## Consequences
-
-**Easier:** illegal states are unrepresentable; consumers narrow once; the compiler catches a missing
-status branch when a new status is added.
-
-**Harder:** the translator is more code than a field-by-field copy, and every new status means a new
-variant plus its branch. That cost is the point — it is the compiler asking a question that would
-otherwise have gone unasked.
-
-## In one breath
-
-*Fields that only exist in certain states are variants rather than optionals, so the model makes
-illegal states unrepresentable — and `unknown` is deliberately not `clean`, because a scanner must
-never say "safe" when it means "I could not tell".*
+**In one breath.** *Fields that only exist in certain states are variants, not optionals, so illegal
+states are unrepresentable — and `unknown` is deliberately not `clean`, because a scanner must never
+say "safe" when it means "I couldn't tell".*
