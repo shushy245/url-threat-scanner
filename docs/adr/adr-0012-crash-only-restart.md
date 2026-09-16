@@ -16,7 +16,8 @@ than lazy.
 **Trade-offs.** Far less code in the failure path, and that path is exercised constantly in normal
 operation instead of only during incidents. The cost: process churn shows up in orchestrator metrics
 and looks alarming, and a crash-loop against a persistently down broker needs backoff from the
-supervisor — Compose uses the default policy, which production would tune.
+supervisor — Compose sets `restart: unless-stopped` on all three services, which production
+would tune further.
 
 **In one breath.** *A dropped connection exits the process rather than reconnecting by hand, because
 the supervisor already solves restart correctly and nothing in memory is worth saving — the broker

@@ -81,6 +81,9 @@ transaction. The API never talks to RabbitMQ, so a broker outage can't fail a su
 event. The relay drains unpublished rows and marks them published only after the broker *confirms* —
 `publish()` returning `true` is flow control, not delivery.
 
+Verified cold against the containers: submitting during a full RabbitMQ outage still returns
+`201`, and the backlog drains by itself once the broker is back.
+
 **Delivery is at-least-once, so the worker is idempotent by design.** It claims work with one
 statement, which is both the idempotency guard and the stale-update guard:
 
@@ -155,7 +158,9 @@ Time-boxed, so these are deliberate cuts with named fixes — not misses.
 - **No list endpoint.** Ids are already sortable and keyset pagination is designed for; nothing else
   depends on it, so it was the right cut.
 - **Checks are simulated** (ADR-0005), behind the port the real ones implement and chosen by
-  `CHECK_MODE` — so real RDAP and TLS adapters are a drop-in. The redirect-chain bonus is next.
+  `CHECK_MODE` — so real RDAP and TLS adapters are a drop-in. `CHECK_MODE=real` makes the worker
+  **refuse to start** rather than quietly fall back to simulated results. The redirect-chain
+  bonus is next.
 - **The DLQ exists; the consumer that drains it doesn't.** Failures dead-letter to `scan.dead` and sit
   there durably, visible in the RabbitMQ UI, but nothing writes them to `dlq_event` yet.
 - **No retry ladder.** A failure dead-letters on the first attempt instead of retrying with backoff —
@@ -179,7 +184,7 @@ instead of failing at the first request.
 | `PORT` | `3000` | API listen port |
 | `DATABASE_URL` | — | Postgres connection string (required) |
 | `RABBITMQ_URL` | — | Broker connection string (required) |
-| `CHECK_MODE` | `simulated` | `simulated` or `real` |
+| `CHECK_MODE` | `simulated` | `simulated`; `real` refuses to start until the adapters exist |
 | `CHECK_TIMEOUT_MS` | `5000` | Per-check timeout; the work is aborted, not abandoned |
 | `WORKER_PREFETCH` | `10` | Unacked messages per worker |
 | `MAX_REDELIVERIES` | `10` | Declared for the retry ladder; **not yet enforced** |
