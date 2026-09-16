@@ -489,3 +489,29 @@ and a readiness probe, and together they close the "silently stops working" fail
 interviewer at a security company will look for. 10.3 and 10.4 are the two that a reviewer reading
 the ADRs will actively go hunting for, because the ADRs claim the properties they break. 10.5–10.8
 are honest README trade-offs if named; 10.9 must not ship unmentioned.
+
+
+---
+
+## Story close-out — case-coverage diff
+
+Planned `Cases:` with **no automated test**, recorded rather than silently dropped:
+
+| Case | Status |
+|---|---|
+| Submit 401 / 400 / 404 at the HTTP layer | manual only — verified against containers |
+| `GET /v1/scans/:id` unknown id → 404 | manual only |
+| Cross-client read → 404 (ADR-0009) | **proven only by reading the code** |
+| Two relay instances draining concurrently | **not tested** |
+| Malformed event → dead-letter | **not tested** |
+| Redacted URL in logs | manual only — grepped container logs, zero leaks |
+| Graceful shutdown requeues in-flight | **not tested** |
+| Redelivery past `MAX_REDELIVERIES` → `dlq_event` | cut with the retry ladder (phase 5) |
+| List endpoint pagination / sort / filter | cut (phase 6) |
+
+## RF-backlog (style/structure, batched — do not fix reactively)
+- `delay.utils.ts` has no abortable variant, so `create-simulated-checks.ts` carries a private one.
+  House rule says that primitive is wrapped once in shared utils.
+- `findById(id)` is unscoped; the cross-client filter happens in the handler after the row is
+  fetched. Scoping the query (`findById({ id, clientId })`) would keep another client's row inside
+  the database entirely — defence in depth, not a correctness fix.
