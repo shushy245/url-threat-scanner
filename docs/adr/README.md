@@ -15,3 +15,7 @@ loud. A decision that cannot survive that compression is not understood well eno
 | [0004](adr-0004-security-posture.md) | SSRF guard + API-key auth ship; rate limiting deliberately deferred |
 | [0005](adr-0005-simulated-checks.md) | Simulated checks behind the real checks' port |
 | [0006](adr-0006-three-deployables.md) | Three deployables; versioned event schemas |
+| [0007](adr-0007-runtime-stack.md) | Express 5, node-postgres, CommonJS |
+| [0008](adr-0008-scan-status-union.md) | Scan status as a discriminated union; `unknown` ≠ `clean` |
+| [0009](adr-0009-auth-lookup-and-cross-client-reads.md) | Digest-keyed auth lookup; cross-client reads return 404 |
+| [0010](adr-0010-liveness-and-readiness.md) | Liveness and readiness are separate endpoints |

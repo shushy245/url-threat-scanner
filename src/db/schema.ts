@@ -1,6 +1,8 @@
 import { relations, sql } from 'drizzle-orm';
 import { index, integer, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 
+import { CheckId, CheckOutcome, ScanStatus, Verdict } from '../domain/scan/model';
+
 export const scanStatusEnum = pgEnum('scan_status', ['pending', 'in_progress', 'completed', 'failed']);
 
 export const checkOutcomeEnum = pgEnum('check_outcome', ['pass', 'warn', 'fail', 'error']);
@@ -19,9 +21,9 @@ export const scanTable = pgTable(
         normalizedUrl: text('normalized_url').notNull(),
         domain: text('domain').notNull(),
 
-        status: scanStatusEnum('status').notNull().default('pending'),
+        status: scanStatusEnum('status').$type<ScanStatus>().notNull().default(ScanStatus.Pending),
         threatScore: integer('threat_score'),
-        verdict: verdictEnum('verdict'),
+        verdict: verdictEnum('verdict').$type<Verdict>(),
         error: text('error'),
 
         // Idempotency-Key support (ADR-0003). requestHash detects the dangerous case: the same key
@@ -54,10 +56,10 @@ export const scanCheckTable = pgTable(
             .notNull()
             .references(() => scanTable.id, { onDelete: 'cascade' }),
 
-        checkId: checkIdEnum('check_id').notNull(),
-        outcome: checkOutcomeEnum('outcome').notNull(),
+        checkId: checkIdEnum('check_id').$type<CheckId>().notNull(),
+        outcome: checkOutcomeEnum('outcome').$type<CheckOutcome>().notNull(),
         score: integer('score').notNull(),
-        details: jsonb('details').notNull().default({}),
+        details: jsonb('details').$type<Record<string, unknown>>().notNull().default({}),
         durationMs: integer('duration_ms').notNull(),
 
         createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -78,7 +80,7 @@ export const outboxEventTable = pgTable(
         aggregateId: text('aggregate_id').notNull(),
         eventType: text('event_type').notNull(),
         eventVersion: integer('event_version').notNull(),
-        payload: jsonb('payload').notNull(),
+        payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
 
         createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
         publishedAt: timestamp('published_at', { withTimezone: true }),
@@ -96,7 +98,7 @@ export const dlqEventTable = pgTable('dlq_event', {
     id: text('id').primaryKey(),
     queue: text('queue').notNull(),
     eventType: text('event_type').notNull(),
-    payload: jsonb('payload').notNull(),
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
     lastError: text('last_error').notNull(),
     redeliveryCount: integer('redelivery_count').notNull(),
 

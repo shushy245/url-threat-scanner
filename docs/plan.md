@@ -270,8 +270,8 @@ Sequenced so the submission is coherent at **any** cut point — each phase ends
 |---|---|---|---|
 | 0 | Scaffold | ✅ done | package/tsconfig/eslint, `docker-compose.yml` (postgres + rabbitmq + 3 services + one-shot migrate), Dockerfile, `docs/plan.md`, the six ADRs |
 | 1 | Schema + repo | ✅ done | Drizzle schema, first migration, `ScanRepository` + port, `generateUniqueId` |
-| 2 | Submit + read | 🟡 in progress — SSRF guard + URL normalization done | `POST /v1/scans` (+ `Idempotency-Key`), `GET /v1/scans/:id`, Zod middleware, SSRF guard, error handler. **Scan + outbox row commit together** |
-| 3 | Messaging | ⬜ todo | amqp wrapper (dead-letter config mandatory in the options type), `ScanRequestedV1`, outbox relay, consumer with CAS claim. **Event flows end to end** |
+| 2 | Submit + read | ✅ done | `POST /v1/scans` (+ `Idempotency-Key`), `GET /v1/scans/:id`, Zod middleware, SSRF guard, error handler. **Scan + outbox row commit together** |
+| 3 | Messaging | 🟡 next | amqp wrapper (dead-letter config mandatory in the options type), `ScanRequestedV1`, outbox relay, consumer with CAS claim. **Event flows end to end** |
 | 4 | Pipeline | ⬜ todo | Check port + registry + 2 simulated checks, scorer, status transitions. **Working system** |
 | 5 | Hardening | ⬜ todo | Bounded redelivery, DLQ consumer → `dlq_event`, per-check timeouts, partial results, API-key auth |
 | 6 | List endpoint | ⬜ todo | Pagination + sort + filter |
@@ -409,3 +409,41 @@ Pre-mortem — the 5 bugs most likely to bite, written as red-first cases:
 3. Timeouts that don't cancel. A bare Promise.race returns early but leaves the check running and the timer holding the event loop open. Needs AbortController plus clearTimeout in a finally.
 4. NaN threat score. "Errored checks are excluded from the denominator" divides by zero when every check errors. That NaN goes straight into a numeric column.
 5. Concurrency: two relay instances double-publishing — the drain must hold FOR UPDATE SKIP LOCKED in the same transaction as the mark.
+
+---
+
+## Phase 9 — SSRF guard verification findings (open, fix before sign-off)
+
+Findings from an adversarial verification pass over `src/utils/url.utils.ts` as committed in
+`dd3d65e` — 28 adversarial URLs and 14 bare addresses probed against the built module, not a code
+read alone. The module is sound where it counts: every `inet_aton` encoding is blocked
+(`2130706433`, `0x7f000001`, `017700000001`, `127.1`, `0x7f.0.0.1`), and `http://①②⑦.0.0.1/`
+— Unicode digit lookalikes — normalizes to `127.0.0.1` and blocks.
+
+Ordered by severity. Each line is a task; `sev` is the honest exploitability, not the scare value.
+
+| # | sev | Finding | Fix |
+|---|---|---|---|
+| 9.1 | **high** | `isBlockedIpAddress` has **zero call sites** — `grep` over `src` finds none outside its own test. The DNS-rebinding defence is written and tested but not in the request path; `submit-scan.handler.ts` imports `validateSubmittedUrl`/`isValidTarget`/`redactUrl` only. | Call it after DNS resolution and again on every redirect hop, per ADR-0004. |
+| 9.2 | **high** | `http://localhost/` is **allowed**. So are `http://metadata.google.internal/` and `http://127.0.0.1.nip.io/` (public DNS, resolves to loopback by design). Architecturally these are meant to be caught post-DNS — but with 9.1 open, the most obvious SSRF target in existence passes end to end. No test covers any of these hostnames. | Add a literal-stage hostname denylist (`localhost`, `*.localhost`, `metadata.google.internal`, `*.internal`) so the defence does not rest entirely on 9.1. |
+| 9.3 | medium | **Dead branch that looks like a control** — `url.utils.ts:168`: `if (first === 0x00_64 && fifth === 0) return undefined;` sits directly above `return undefined`, so it does nothing. It reads as intended NAT64 handling, and `http://[64:ff9b::7f00:1]/` (NAT64 well-known prefix wrapping 127.0.0.1) is **allowed**. | Implement it — unwrap the low 32 bits exactly as the `::ffff:` path above does — or delete it. Dead code resembling a security control is worse than none, because a reader credits it. |
+| 9.4 | low | `http://[::127.0.0.1]/` (IPv4-**compatible** IPv6, the deprecated sibling of `::ffff:`) normalizes to `[::7f00:1]` and is **allowed**; `findBlockedIpv6Label` unwraps only the `::ffff:` form. Verified not exploitable on this stack before flagging it: `net.connect({host:'::7f00:1'})` → `EHOSTUNREACH`, i.e. the form is not routed. A completeness gap, not a live bypass. | Fold into the 9.3 fix. |
+| 9.5 | medium | **The post-DNS guard fails open.** `isBlockedIpAddress` returns `false` for `''`, `'not-an-ip'`, and `'127.0.0.1 '` (trailing space) — anything unparseable is reported as not-blocked. | Trim, then reject non-IP input explicitly. A security primitive defaults closed; `return false` on "I could not parse this" is the wrong default. |
+| 9.6 | medium | **A trailing dot splits the domain key.** `http://example.com./` yields `domain = 'example.com.'` where `http://example.com/` yields `'example.com'` — same site, two values. Fragments the `scan_domain_idx` filter and every per-domain aggregation on the list endpoint. | Strip the trailing dot in `normalize`. One line. |
+| 9.7 | low | `PARSED_BLOCKED_RANGES` uses `parseIpv4(address) ?? 0`, so a typo'd CIDR row silently becomes base `0` and stops enforcing — the silent-fallback failure mode, in the one table where it is least acceptable. | Throw at module init on an unparseable row. Fail loudly at startup, never quietly at request time. |
+| 9.8 | note | `redactUrl` correctly strips embedded credentials (`https://u:p@x.com/…` → `https://x.com/…`) but **no test locks that in**; path tokens (`/reset/TOKEN123`) are preserved by design. | Add the credential-stripping test. State the path-token trade-off in the README rather than leaving it silent. |
+
+**Test-style deviation (prose-strength only — this repo has no lint wiring):** `url.utils.test.ts`
+asserts with raw `expect` in test bodies through a `reasonFor` helper, where the doctrine puts
+assertions behind a driver's `assert.*` methods (Behaviour-Driven Development — assertions live in
+the driver so a contract change touches one file, not thirty). Recorded rather than silently
+accepted; not worth a rewrite inside the time budget.
+
+**Coverage gaps worth closing if 9.1–9.2 are fixed:** `localhost` and internal-hostname literals;
+the trailing-dot normalization; `isBlockedIpAddress` on unparseable input; NAT64 and
+IPv4-compatible IPv6.
+
+**If the clock beats these:** 9.1 and 9.2 are the only two that change the security posture of the
+running service — everything below them is completeness. Shipping with 9.3–9.8 open and *named in
+the README's trade-offs* is a defensible position; shipping with 9.1 open and unmentioned is not,
+because the ADR claims a post-resolution re-check the code does not perform.
