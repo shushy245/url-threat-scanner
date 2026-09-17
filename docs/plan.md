@@ -493,6 +493,43 @@ are honest README trade-offs if named; 10.9 must not ship unmentioned.
 
 ---
 
+## Phase 11 — post-close-out broker-injection verification (2026-09-17, HEAD `4175ae8`)
+
+Third verification pass, run against the **running stack** with messages injected directly at the
+broker — the one surface Phases 9 and 10 never probed, because every earlier pass drove the system
+through the API, and the API only ever produces well-formed events. Everything else re-verified
+green: `tsc` clean, `eslint` clean, 83/83 tests, every documented endpoint, status code, SSRF
+rejection, idempotency semantic and log-redaction claim confirmed live.
+
+Both findings sit in the blind spot the close-out already names — *"Malformed event → dead-letter:
+**not tested**"* — and they compound: 11.1 creates the poison message, 11.2 removes the net that was
+supposed to catch it.
+
+| # | sev | Finding | Fix |
+|---|---|---|---|
+| 11.1 | **high** | **A non-JSON message crash-loops the worker forever.** `JSON.parse` sits *outside* the try/catch (`consumer.ts:49`) and `onMessage` is fired as `void onMessage(received)` (`:96`), so a malformed body throws an unhandled rejection, Node exits, the message returns to the queue unacked, and `restart: unless-stopped` feeds it straight back in. Observed live: one injected message crashed the worker **10 times in ~40s** (`SyntaxError: Unexpected token 'h' … at onMessage`). The guard written for exactly this case is the *next statement* — `eventEnvelopeSchema.safeParse` → `'unparseable envelope, dead-lettering'`. The parse just throws one line before its own net. | Parse inside the guard: `JSON.parse` in a `try`, and on throw take the same `nack(message, false, false)` path the failed `safeParse` already takes. |
+| 11.2 | **high** | **The dead-letter queue is never declared, so every dead-lettered message is silently dropped.** `declareTopology` (`amqp.ts:51`) asserts the `scan.dlx` *exchange* but never asserts or binds `scan.dead`; `SCAN_DEAD_QUEUE` (`topology.ts:11`) has zero call sites in `src`. A topic exchange with no bindings discards what it routes. Observed live: an unprocessable payload logged `'processScan: payload does not match ScanRequested v1, dead-lettering'`, was nack'd — and the broker then held exactly one queue (`scan.requested`, 0 messages) with `scan.dlx` bindings `[]`. The message evaporated. This is the precise failure `amqp.ts`'s own header comment claims the mandatory-config type prevents: the type makes the dead-letter *config* unskippable, but nothing asserts the *destination*. | `assertQueue(SCAN_DEAD_QUEUE, { durable: true })` and `bindQueue(SCAN_DEAD_QUEUE, deadLetter.exchange, '#')` in `declareTopology`. |
+
+**Docs these falsify.** The README's *"Failures dead-letter to `scan.dead` and sit there durably,
+visible in the RabbitMQ UI"* was untrue as deployed — corrected in the same commit as this entry.
+Finding 10.7 was optimistic in the same direction: dead-lettered messages do not "accumulate
+invisibly in the broker", they are discarded. Fixing 11.2 is what makes 10.7's premise true and a
+DLQ consumer worth writing.
+
+**The test that should ship with either fix.** Publish a non-JSON body and a schema-invalid payload
+straight to `scan.events`; assert the worker survives both and that `scan.dead` holds two messages.
+That single test closes the close-out's untested case and locks in both fixes at once.
+
+**Re-confirmed as closed, not defects.** 10.1 and 10.2 are fixed — `restart: unless-stopped` is on
+`api`, `relay` and `worker` (`migrate` correctly stays `'no'`), and `/ready` probes the database
+while `/health` stays liveness-only. The seven pre-existing worker restarts in the container log
+were `ENOTFOUND rabbitmq` and connection-lost exits from the Phase 10 outage test: crash-only
+restart working as ADR-0012 designed. The documented cuts — no DLQ consumer (10.7),
+`MAX_REDELIVERIES` unenforced (10.6), simulated checks, no rate limiter, no list endpoint — remain
+deliberate and named.
+
+---
+
 ## Story close-out — case-coverage diff
 
 Planned `Cases:` with **no automated test**, recorded rather than silently dropped:
@@ -503,7 +540,7 @@ Planned `Cases:` with **no automated test**, recorded rather than silently dropp
 | `GET /v1/scans/:id` unknown id → 404 | manual only |
 | Cross-client read → 404 (ADR-0009) | **proven only by reading the code** |
 | Two relay instances draining concurrently | **not tested** |
-| Malformed event → dead-letter | **not tested** |
+| Malformed event → dead-letter | **not tested** — and the gap proved expensive: both Phase 11 defects live here |
 | Redacted URL in logs | manual only — grepped container logs, zero leaks |
 | Graceful shutdown requeues in-flight | **not tested** |
 | Redelivery past `MAX_REDELIVERIES` → `dlq_event` | cut with the retry ladder (phase 5) |

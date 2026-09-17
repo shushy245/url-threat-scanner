@@ -155,15 +155,38 @@ Time-boxed, so these are deliberate cuts with named fixes — not misses.
 - **Checks are simulated** (ADR-0005), behind the port the real ones implement, so real RDAP and TLS
   adapters are a drop-in. `CHECK_MODE=real` makes the worker **refuse to start** rather than quietly
   serve fabricated findings. The redirect-chain bonus is next.
-- **The DLQ exists; the consumer that drains it doesn't.** Failures dead-letter to `scan.dead` and sit
-  there durably, visible in the RabbitMQ UI — but nothing writes them to `dlq_event` yet.
+- **The DLQ is declared but not wired.** Failures nack to `scan.dlx`, no queue is bound to it, and
+  nothing writes `dlq_event` — so today a dead-lettered message is dropped, not parked. See the
+  defect below; the consumer that drains the queue is the piece that stays deliberately cut.
 - **No retry ladder.** A failure dead-letters on the first attempt: bounded and visible, but a
   transient blip costs the message. `MAX_REDELIVERIES` is declared for it.
 - **One bit of debt.** `src/utils/delay.utils.ts` isn't abortable, so the checks carry a private
   abortable sleep. Consolidating it is a pure refactor.
 
-In order, with more time: real adapters and the redirect chain, the list endpoint, the DLQ consumer,
-per-URL caching, then OpenTelemetry traces on the correlation id already in every log line.
+### Known defects
+
+Found in a pass that injected messages straight at the broker — the one surface the earlier
+verification passes missed, because they drove the system through the API, and the API only ever
+produces well-formed events. Both are reproduced against the running stack and written up as Phase 11
+in [`docs/plan.md`](docs/plan.md). Neither is reachable through the HTTP API.
+
+- **A non-JSON message crash-loops the worker.** `JSON.parse` sits outside the try/catch
+  (`src/messaging/consumer.ts:49`) and the handler is fired as `void onMessage(…)`, so a malformed
+  body throws an unhandled rejection, the process exits, the message returns to the queue unacked and
+  `restart: unless-stopped` feeds it back. Observed: 10 crashes in ~40s from one message. The guard
+  written for this case — `safeParse` → *"unparseable envelope, dead-lettering"* — is the next
+  statement; the parse throws one line before its own net. **Fix:** parse inside the guard.
+- **Dead-lettered messages are silently dropped.** `declareTopology` asserts the `scan.dlx` exchange
+  but never declares or binds `scan.dead`, and a topic exchange with no bindings discards what it
+  routes. Observed: an unprocessable payload logged *"dead-lettering"*, was nack'd, and vanished.
+  This is the failure the amqplib wrapper's mandatory dead-letter option type exists to prevent — the
+  type makes the *config* unskippable, but nothing asserts the *destination*. **Fix:** assert and
+  bind the queue in `declareTopology`, with the test that publishes both bad messages and checks the
+  worker survives.
+
+In order, with more time: those two defects and the test that locks them in, then real adapters and
+the redirect chain, the list endpoint, the DLQ consumer, per-URL caching, then OpenTelemetry traces
+on the correlation id already in every log line.
 
 ---
 

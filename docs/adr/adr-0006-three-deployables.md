@@ -21,3 +21,8 @@ deployment decision rather than a rewrite.
 **In one breath.** *Three processes because they scale on different signals and a slow check must
 never starve the API, and versioned schemas parsed on receive because producer and consumer ship
 separately — a shared TypeScript type is a promise nothing enforces across a version skew.*
+
+**Open defect against this (2026-09-17).** The trade-off above overstates what ships: an unparseable
+event does *not* dead-letter at the edge today. A non-JSON body crashes the worker before the schema
+guard runs, and a schema-invalid payload nacks to an exchange with no bound queue and is discarded.
+The decision stands — the mechanism that delivers it is Phase 11 in `docs/plan.md`.

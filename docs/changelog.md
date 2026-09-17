@@ -26,3 +26,19 @@ tests (70 unit, 13 integration), 13 ADRs, 86 files, +5,575 lines (`git diff --st
 - No test for a malformed event dead-lettering, nor for log redaction or graceful shutdown.
 - Retry ladder, DLQ consumer, list endpoint and real RDAP/TLS adapters are cut, not missing by
   accident — see the README trade-offs section.
+
+### Defects found after close-out — 2026-09-17
+
+Two open defects, found by injecting messages straight at the broker rather than through the API.
+Both are reproduced against the running stack; details and fixes in Phase 11 of `docs/plan.md`.
+
+- **A non-JSON message crash-loops the worker.** The `JSON.parse` in `consumer.ts` sits outside the
+  try/catch, so a malformed body kills the process, the message is requeued unacked, and the restart
+  policy feeds it back — 10 crashes in ~40s from one message. The guard meant to dead-letter it is
+  the next statement.
+- **Dead-lettered messages are silently dropped.** `declareTopology` asserts the `scan.dlx` exchange
+  but never declares or binds `scan.dead`, so nacks route to an exchange with no bindings and vanish.
+  Makes the "sits there durably in the RabbitMQ UI" claim false; README corrected.
+
+Neither is reachable through the HTTP API, and everything else re-verified green: 83/83 tests, every
+documented status code, SSRF rejection, idempotency semantic and log-redaction claim confirmed live.

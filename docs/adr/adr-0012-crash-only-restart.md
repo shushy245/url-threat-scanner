@@ -22,3 +22,9 @@ would tune further.
 **In one breath.** *A dropped connection exits the process rather than reconnecting by hand, because
 the supervisor already solves restart correctly and nothing in memory is worth saving — the broker
 requeues, the consumer is idempotent, and the outbox still holds anything unconfirmed.*
+
+**Open defect against this (2026-09-17).** Crash-only is safe here *because* the guards around it
+hold — and for one input they don't. A non-JSON message crashes the worker *before* the guard that
+would dead-letter it, so the broker requeues it and `restart: unless-stopped` replays the crash
+indefinitely: 10 restarts in ~40s, observed. Crash-only needs every poison input rejected before the
+exit, never after. Phase 11 in `docs/plan.md`.
