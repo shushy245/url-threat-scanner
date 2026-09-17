@@ -1,6 +1,6 @@
-# URL Threat Scanner
+# Mock URL Threat Scanner
 
-A backend service for Above Security's sensor. It takes a suspicious URL, returns a scan id right
+A backend service for a job interview, created in 1hr with AI-assisted coding. It takes a suspicious URL, returns a scan id right
 away, runs the security checks in the background, and serves the per-check results and a threat
 score by id.
 
